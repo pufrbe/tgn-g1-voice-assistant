@@ -78,3 +78,15 @@ TO-DO:
 - [ ] Push to talk
 - [ ] Reiniciar sesión cada 15 minutos
 - [ ] Deploy a Robot
+- [ ] Agregar beeps al script para notificar al usuario
+
+https://deepwiki.com/unitreerobotics/unitree_sdk2/3.4-g1-audio-system
+
+https://deepwiki.com/unitreerobotics/unitree_sdk2/10.5-audio-system-examples
+
+https://deepwiki.com/unitreerobotics/unitree_sdk2_python/7.3-audio-and-media-examples
+
+
+## Deploy al G1
+
+[nodo de captura de audio](https://github.com/mgonzs13/audio_common/)
