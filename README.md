@@ -89,4 +89,15 @@ https://deepwiki.com/unitreerobotics/unitree_sdk2_python/7.3-audio-and-media-exa
 
 ## Deploy al G1
 
-[nodo de captura de audio](https://github.com/mgonzs13/audio_common/)
+[nodo de captura de audio](https://github.com/mgonzs13/audio_common/) -> posible utilidad
+ 
+### Idea de flujo micG1-speakerG1
+
+- [este ejemplo](https://deepwiki.com/unitreerobotics/unitree_sdk2/10.5-audio-system-examples) muestra que el stream del mic se envia por UDP `GROUP_IP = "239.168.123.161", PORT = 5555` -> escuchamos este puerto en python y recibimos el input del microfono. (modificamos input dev de el script `gemini_ptt2audio_session.py`)
+- pasamos el input a gemini con el script actual
+- para el output dev usamos `TtsMaker()` del sdk de unitree [AudioClient](https://github.com/unitreerobotics/unitree_sdk2_python/blob/master/unitree_sdk2py/g1/audio/g1_audio_client.py)
+
+### Prueba previa 
+- conectamos el respeaker mic a la Jetson del G1 y usamos ese input como microfono (así dejamos el desarrollo de la captura del microfno del g1 para mas adelante)
+- matenemos el script del la seccion: input-procesamiento
+- modificamos output para usar el speaker del g1 directamente con `TtsMaker()` y usando `output_audio_transcription()`
