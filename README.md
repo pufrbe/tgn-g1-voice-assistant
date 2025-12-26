@@ -97,6 +97,11 @@ https://deepwiki.com/unitreerobotics/unitree_sdk2_python/7.3-audio-and-media-exa
 - pasamos el input a gemini con el script actual
 - para el output dev usamos `TtsMaker()` del sdk de unitree [AudioClient](https://github.com/unitreerobotics/unitree_sdk2_python/blob/master/unitree_sdk2py/g1/audio/g1_audio_client.py)
 
+Mas adelante:
+- nodo de ROS2 que lea el puerto 5555 y publique a un topico /mic/raw_data
+- nodo gemini_node que haga genere el transcript y lo publique a un topico /assistant/transcript
+- nodo tts que suscriba al transcript y publique el audio? llamar a Ttsmaker() o directamente PlayStream() y usar la voz de gemini (hay que hacer un downsampling porque el sample rate de gemini es 24kHz y el del g1 16kHz)
+
 ### Prueba previa 
 - conectamos el respeaker mic a la Jetson del G1 y usamos ese input como microfono (así dejamos el desarrollo de la captura del microfno del g1 para mas adelante)
 - matenemos el script del la seccion: input-procesamiento
