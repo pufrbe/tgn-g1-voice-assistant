@@ -24,7 +24,7 @@ Para instalar los paquetes de python necesarios puede instalarse directamente me
 pip install -r requirements.txt
 ```
 
-Se recomienda crear un virtual environment. 
+Se recomienda crear un virtual environmen (`.gemini_venv` así ya esta trackeado en el `gitignore`) 
 
 Si no, se pueden instalar los siguientes paquetes de manera manual
 ### Instalar sdk de Gen AI
