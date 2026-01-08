@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import time
+import socket
 
 import pyaudio
 import math
@@ -22,6 +23,9 @@ MIC_RATE = 16000
 #OUT_RATE = 24000
 CHUNK = 1024  # ~64ms at 16kHz
 
+MCAST_PORT=5555
+MCAST_GRP="239.168.123.161"
+
 # ---- Gemini Live ----
 model = "gemini-2.5-flash-native-audio-preview-12-2025"
 tools = [{'google_search': {}}]
@@ -31,7 +35,14 @@ config = {
     "tools": tools,
     # optional but very helpful for debugging:
     "output_audio_transcription": {},
-    "system_instruction": "You are a helpful voice assistant. Reply concisely.",
+    "system_instruction": "You are a helpful voice assistant for Argentine gas transportation company TGN. Reply concisely and in spanish.",
+    "speech_config": {
+        "voice_config": {
+            "prebuilt_voice_config": {
+                "voice_name": "Algenib",
+            }
+        }
+    },
     # "system_instruction":"For factual or time-sensitive questions, use Google Search before answering. "
     # "If you did not use Search, say 'not searched'. Keep answers concise.",
 }
@@ -88,7 +99,7 @@ def play_pcm_stream(client, pcm_list, stream_name="example", chunk_size=96000, s
         chunk = pcm_data[offset:offset + current_chunk_size]
 
         sleep_time = current_chunk_size/out_rate/2
-        print(f"sleep time: {sleep_time}")
+        #print(f"sleep time: {sleep_time}")
         if verbose:
             # Print info about the current chunk
             print(f"[CHUNK {chunk_index}] offset = {offset}, size = {current_chunk_size} bytes")
@@ -109,7 +120,7 @@ def play_pcm_stream(client, pcm_list, stream_name="example", chunk_size=96000, s
         offset += current_chunk_size
         chunk_index += 1
         x0 = time.time() - x0
-        time.sleep(max(sleep_time-x0,0))
+        #time.sleep(max(sleep_time-x0,0))
 
 def silence_chunk() -> bytes:
     return b"\x00\x00" * CHUNK
@@ -121,36 +132,46 @@ async def wait_line(prompt: str = "") -> str:
 
 async def record_until_enter(max_seconds: float = 30.0) -> list[bytes]:
     """Record mic until user presses ENTER again."""
-    stream = await asyncio.to_thread(
-        pya.open,
-        format=FORMAT,
-        channels=CHANNELS,
-        rate=MIC_RATE,
-        input=True,
-        input_device_index=IN_DEV,
-        frames_per_buffer=CHUNK,
-    )
+    loop = asyncio.get_running_loop()
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", MCAST_PORT))
+
+    mreq = struct.pack("4s4s", socket.inet_aton(MCAST_GRP), socket.inet_aton("192.168.123.164"))
+
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    #sock.setblocking(False)
+    #sock.settimeout(2.0)
 
     frames: list[bytes] = []
     print("[REC] Recording... press ENTER to stop and send.")
+    stop_task = asyncio.create_task(asyncio.to_thread(input))
     t0 = time.time()
-    stop_task = asyncio.create_task(wait_line(""))
 
     try:
         while True:
-            if stop_task.done():
-                _ = stop_task.result()
-                break
-            if time.time() - t0 > max_seconds:
+            timeout = max_seconds - (time.time() - t0)
+            if timeout <= 0:
                 print("[REC] Max record time reached; sending.")
-                stop_task.cancel()
                 break
 
-            data = await asyncio.to_thread(stream.read, CHUNK, exception_on_overflow=False)
-            frames.append(data)
+            recv_task = asyncio.create_task(loop.sock_recvfrom(sock, CHUNK))
+
+            done, _ = await asyncio.wait(
+                {recv_task, stop_task},
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if stop_task in done:
+                break
+
+            if recv_task in done:
+                data, _ = recv_task.result()
+                frames.append(data)
     finally:
-        stream.stop_stream()
-        stream.close()
+        sock.close()
 
     # small silence tail to help VAD infer end-of-speech
     frames.extend([silence_chunk()] * 6)

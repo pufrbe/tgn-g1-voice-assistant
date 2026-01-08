@@ -26,7 +26,7 @@ def list_devices(p: pyaudio.PyAudio):
     except Exception as e:
         print("\nCould not read default devices:", e)
 
-def open_streams(p: pyaudio.PyAudio, rate: int, chunk: int, in_dev: int | None, out_dev: int | None):
+def open_streams(p: pyaudio.PyAudio, rate: int, chunk: int, in_dev: int, out_dev: int):
     in_stream = p.open(
         format=FORMAT,
         channels=CHANNELS,
