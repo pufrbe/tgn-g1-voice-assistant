@@ -1,5 +1,14 @@
-## Pasos para generar un API request con micorfono-audio en Gemini
+# Chatbot de Gemini para robot Unitree G1 EDU
 
+TO-DO:
+- [ ] Crear Clases para cada etapa del flujo del script.
+- [ ] Modificar el Dockerfile para que se corra directamente el script del chatbot
+- [ ] Implementar un push-to-talk con un botón del joystick. 
+- [ ] Sacar el clonado de este repositorio del Dockerfile y copiar directamente los archivos `./gemini_chatbot_g1.py` y `./requirements.txt` al directorio `packages`. 
+
+Este asistente de voz usa el microfono interno del G1 para capturar audio, la API de Gemini como backend para procesar el audio recibido, y el servicio de Audio desarrollado en el SDK de Unitree para controlar el parlante del robot.
+
+## Prerequisitos
 ### Crear una Clave API
 - Entrar a Google AI Studio
 - Crear un nuevo proyecto
@@ -7,102 +16,34 @@
 - Una vez generado el API Key copiarlo y setearlo como una variable de entorno:
 
 ```bash
-export GEMINI_API_KEY={your_api_key}
+cd ~
+echo export GEMINI_API_KEY="{YOUR_KEY}" >> .bashrc
 ```
 
-### Integración con micrófono y audio
+### Poner el robot en modo "wake up"
+La PC1 del robot publica el stream del microfono en el puerto udp `5555` con la dirección `239.168.123.161`. Para que iniciar el servicio, se debe poner al robot en el modo `wake up` presionando los botones  `L1+L2` en el control remoto del robot (este comando cicla entre los modos `wake up conversation mode` y `push button conversation mode`). Una vez que el robot se encuentra en `wake up` mode, se debe decir la palabra cable `HELLO ROBOT`. Así el robot ya esta configurado correctamente y debería publicar el stream del microfono. Para verificar esto, se puede correr el siguiente comando en la PC2.
 
-Instalar dependencias 
+<!-- chequear este comando -->
+```bash
+tcpdump -ni eth0 host 239.168.123.161 and udp port 5555
+``` 
+Si se reciben paquetes, la configuración fue exitosa.
+
+## Ejecutar el script del chatbot
+Para correr el script `./gemini_chatbot_g1.py` se tiene un container de Docker, que se puede buildear de la siguiente manera:
 
 ```bash
-sudo apt install portaudio19-dev
+docker build -t gemini-chatbot .
 ```
 
-Para instalar los paquetes de python necesarios puede instalarse directamente mediante:
+Esto crea una imagen de docker según el archivo `Dockerfile` con el nombre `gemini-chatbot`.
 
+Para ejecutar un containar con esta imagen se debe correr el siguiente comando
+<!-- chequear este comando -->
 ```bash
-pip install -r requirements.txt
+docker run --rm -it --privileged --network=host -v /dev:/dev -e GEMINI_API_KEY=$GEMINI_API_KEY -t gemini-chatbot-service gemini-chatbot
 ```
 
-Se recomienda crear un virtual environmen (`.gemini_venv` así ya esta trackeado en el `gitignore`) 
+Una vez dentro del container, ejecutar el script como: `python3 gemini_chatbot_g1.py`
 
-Si no, se pueden instalar los siguientes paquetes de manera manual
-### Instalar sdk de Gen AI
-
-```bash
-pip install -q -U google-genai
-```
-
-### Instalar pyaudio
-
-Luego instalar el paquete de python
-```bash
-pip install pyaudio
-```
-
-Para hacer un test del microfono y audio correr el archivo: `mic_test.py`
-
-Para listar los dispositivos de audio usar: `--list` como argumento
-En mi caso el mic array es el dispositivo 24 con lo cual, para utilizarlo como input, corro el archivo de la siguiente manera:
-
-```bash
-python ./mic_test.py --in-dev 24
-```
-
-Y como ouptut usa el default seteado mediante la GUI de configuración del sistema operativo.
-
-## Single query con microfono-audio
-
-Para correr un único prompt que es capturado por micrófno y cuya respuesta se recibe por audio correr el script: `./geimini_one_shot_audio.py`
-
-## Single query Push-To-Talk
-
-Instalar el paquete para reconocer teclas del teclado
-```bash
-pip install pynput
-```
-
-Para correr un único prompt que es capturado por micrófno con la modalidad push-to-talk y cuya respuesta se recibe por audio correr el script: `./geimini_ptt_single_query.py`
-
-
-## Loop con boton Enter
-
-https://ai.google.dev/gemini-api/docs/live?example=mic-stream
-
-https://ai.google.dev/gemini-api/docs/live?example=mic-stream#example-applications
-
-El script `./gemini_toggle2audio_session.py` utiliza la tecla `ENTER` para empezar a escuchar (no push to talk, toggle) y levanta un contexto que se mantiene activo durante la duración de la ejecución del script (falta agregar un reinicio cada 15 minutos tal como recomienda Google). Se pueden realizar multiples queries en la misma ejecución.
-
-TO-DO:
-
-- [ ] Push to talk
-- [ ] Reiniciar sesión cada 15 minutos
-- [ ] Deploy a Robot
-- [ ] Agregar beeps al script para notificar al usuario
-
-https://deepwiki.com/unitreerobotics/unitree_sdk2/3.4-g1-audio-system
-
-https://deepwiki.com/unitreerobotics/unitree_sdk2/10.5-audio-system-examples
-
-https://deepwiki.com/unitreerobotics/unitree_sdk2_python/7.3-audio-and-media-examples
-
-
-## Deploy al G1
-
-[nodo de captura de audio](https://github.com/mgonzs13/audio_common/) -> posible utilidad
- 
-### Idea de flujo micG1-speakerG1
-
-- [este ejemplo](https://deepwiki.com/unitreerobotics/unitree_sdk2/10.5-audio-system-examples) muestra que el stream del mic se envia por UDP `GROUP_IP = "239.168.123.161", PORT = 5555` -> escuchamos este puerto en python y recibimos el input del microfono. (modificamos input dev de el script `gemini_ptt2audio_session.py`)
-- pasamos el input a gemini con el script actual
-- para el output dev usamos `TtsMaker()` del sdk de unitree [AudioClient](https://github.com/unitreerobotics/unitree_sdk2_python/blob/master/unitree_sdk2py/g1/audio/g1_audio_client.py)
-
-Mas adelante:
-- nodo de ROS2 que lea el puerto 5555 y publique a un topico /mic/raw_data
-- nodo gemini_node que haga genere el transcript y lo publique a un topico /assistant/transcript
-- nodo tts que suscriba al transcript y publique el audio? llamar a Ttsmaker() o directamente PlayStream() y usar la voz de gemini (hay que hacer un downsampling porque el sample rate de gemini es 24kHz y el del g1 16kHz)
-
-### Prueba previa 
-- conectamos el respeaker mic a la Jetson del G1 y usamos ese input como microfono (así dejamos el desarrollo de la captura del microfno del g1 para mas adelante)
-- matenemos el script del la seccion: input-procesamiento
-- modificamos output para usar el speaker del g1 directamente con `TtsMaker()` y usando `output_audio_transcription()`
+Actualmente, el script considera que se tiene un teclado a la PC2 y utiliza la tecla `Enter` (toggle, no push-to-talk) para escuchar al usuario. 
