@@ -7,6 +7,7 @@ TO-DO:
 - [ ] Sacar el clonado de este repositorio del Dockerfile y copiar directamente los archivos `./gemini_chatbot_g1.py` y `./requirements.txt` al directorio `packages`.
 - [ ] Verificar si es necesario hablarle una primera vez con `Hello robot` para que publique el audio.
 - [ ] Verificar si hay que agregarse al grupo multicast manualmente para probar la recepción con `tcpdump`.
+- [ ] Actualizar `requirements.txt` para que tenga las versiones de los paquetes que sabemos que funcionan en el robot.
 
 Este asistente de voz usa el micóofono interno del G1 para capturar audio, la API de Gemini como backend para procesar el audio recibido, y el servicio de Audio desarrollado en el SDK de Unitree para controlar el parlante del robot.
 
