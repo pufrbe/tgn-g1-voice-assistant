@@ -7,9 +7,8 @@ import pyaudio
 import math
 from scipy import signal
 from google import genai
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
+from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 from unitree_sdk2py.g1.audio.g1_audio_client import AudioClient
-from unitree_sdk2py.idl.unitree_go.msg.dds_ import _WirelessController_
 import numpy as np
 import struct
 
@@ -63,15 +62,6 @@ ChannelFactoryInitialize(0, net_if)
 audioClient = AudioClient()
 audioClient.SetTimeout(10.0)
 audioClient.Init()
-
-controller_input_event = asyncio.Event()
-
-def callback(msg: WirelessController_):
-    if msg.key == 512:
-        controller_input_event.set()
-
-sub = ChannelSubscriber("rt/wirelesscontroller", WirelessController_)
-sub.Init(callback)
 
 def array_resample(array : bytearray, in_rate : int, out_rate : int):
     factor = math.gcd(in_rate, out_rate)
@@ -139,8 +129,6 @@ def silence_chunk() -> bytes:
 async def wait_line(prompt: str = "") -> str:
     return (await asyncio.to_thread(input, prompt)).strip()
 
-async def wait_controller_input():
-    await controller_input_event.wait()
 
 async def record_until_enter(max_seconds: float = 30.0) -> list[bytes]:
     """Record mic until user presses ENTER again."""
@@ -158,8 +146,7 @@ async def record_until_enter(max_seconds: float = 30.0) -> list[bytes]:
 
     frames: list[bytes] = []
     print("[REC] Recording... press ENTER to stop and send.")
-    #stop_task = asyncio.create_task(asyncio.to_thread(input))
-    stop_task = asyncio.create_task(wait_controller_input())
+    stop_task = asyncio.create_task(asyncio.to_thread(input))
     t0 = time.time()
 
     try:
@@ -286,15 +273,11 @@ async def main():
 
     async with client.aio.live.connect(model=model, config=config) as session:
         while True:
-            #cmd = await wait_line("Ready. Press ENTER to record (or q to quit): ")
-            #if cmd.lower() == "q":
-            #    break
-
-            await wait_controller_input()
-            controller_input_event.clear()
+            cmd = await wait_line("Ready. Press ENTER to record (or q to quit): ")
+            if cmd.lower() == "q":
+                break
 
             frames = await record_until_enter(max_seconds=30.0)
-            controller_input_event.clear()
             if len(frames) <= 6:
                 print("[INFO] Too short; try again.\n")
                 continue
