@@ -21,7 +21,7 @@ FORMAT = pyaudio.paInt16
 CHANNELS = 1
 MIC_RATE = 16000
 #OUT_RATE = 24000
-CHUNK = 1024  # ~64ms at 16kHz
+CHUNK = 8192
 
 MCAST_PORT=5555
 MCAST_GRP="239.168.123.161"
@@ -90,7 +90,6 @@ def play_pcm_stream(client, pcm_list, stream_name="example", chunk_size=96000, s
     offset = 0
     chunk_index = 0
     total_size = len(pcm_data)
-    print(f"total_size: {total_size}")
 
     while offset < total_size:
         x0 = time.time()
@@ -120,7 +119,6 @@ def play_pcm_stream(client, pcm_list, stream_name="example", chunk_size=96000, s
         offset += current_chunk_size
         chunk_index += 1
         x0 = time.time() - x0
-        #time.sleep(max(sleep_time-x0,0))
 
 def silence_chunk() -> bytes:
     return b"\x00\x00" * CHUNK
@@ -257,7 +255,7 @@ async def send_one_turn(session, frames: list[bytes]):
     Send one utterance to the *same* live session.
     We pace chunks roughly in real-time so VAD behaves more reliably.
     """
-    chunk_secs = CHUNK / MIC_RATE  # ~0.064s
+    chunk_secs = len(frames[0]) / MIC_RATE
     for ch in frames:
         await session.send_realtime_input(audio={"data": ch, "mime_type": f"audio/pcm;rate={MIC_RATE}"})
         await asyncio.sleep(chunk_secs)  # helps VAD / turn-taking consistency
@@ -282,8 +280,9 @@ async def main():
                 print("[INFO] Too short; try again.\n")
                 continue
 
-            print("[Gemini] replying...")
+            
             await send_one_turn(session, frames)
+            print("[Gemini] replying...")
             await play_reply_streaming(session)
             print()
 
