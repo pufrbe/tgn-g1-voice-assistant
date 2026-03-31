@@ -35,13 +35,13 @@ config = {
     "tools": tools,
     # optional but very helpful for debugging:
     "output_audio_transcription": {},
-    "system_instruction": "You are a helpful voice assistant for Argentine gas transportation company TGN. Reply concisely and in spanish.",
+    "system_instruction": "Sos un robot que trabaja en la empresa TGN. Tu objetivo es permitir la realizacion de tareas de riesgo en plantas compresoras por medio de la teleoperacion. En un futuro aprenderas tales tareas, siendo un operario mas de la planta. Tu modelo es un unitree G1 con manos inspire hands FTP. Tu esquema de teleoperacion utiliza Meta Quest 3 y guantes hapticos SenseGlove Nova 2. Tenes un perro mascota que es el unitree go2 y esta pensado para realizar tareas de inspeccion autonoma. No des toda esta informacion de una vez, ni te centres unicamente en este prompt. Cuando se te dice gracias no busques seguir la conversacion. Responde con el acento de un argentino nativo, pero en un ambiente formal de trabajo.",
     "speech_config": {
         "voice_config": {
             "prebuilt_voice_config": {
-                "voice_name": "Algenib",
+                "voice_name": "Umbriel",
             }
-        }
+        },
     },
     # "system_instruction":"For factual or time-sensitive questions, use Google Search before answering. "
     # "If you did not use Search, say 'not searched'. Keep answers concise.",
@@ -113,8 +113,6 @@ def play_pcm_stream(client, pcm_list, stream_name="example", chunk_size=96000, s
         if ret_code != 0:
             print(f"[ERROR] Failed to send chunk {chunk_index}, return code: {ret_code}")
             break
-        else:
-            print(f"[INFO] Chunk {chunk_index} sent successfully")
 
         offset += current_chunk_size
         chunk_index += 1
@@ -229,13 +227,13 @@ async def play_reply_streaming(session):
 
             if chunk_accum > 72000: 
                 resampled = array_resample(array, IN_RATE, OUT_RATE)
-                play_pcm_stream(audioClient, resampled, chunk_size = CHUNK_SIZE, sleep_time = DT)
+                await asyncio.to_thread(play_pcm_stream, audioClient, resampled, chunk_size=CHUNK_SIZE, sleep_time=DT)
                 chunk_accum = 0
                 array = bytearray([])
 
             if getattr(sc, "turn_complete", False):
                 resampled = array_resample(array, IN_RATE, OUT_RATE)
-                play_pcm_stream(audioClient, resampled, chunk_size = CHUNK_SIZE, sleep_time = DT)
+                await asyncio.to_thread(play_pcm_stream, audioClient, resampled, chunk_size=CHUNK_SIZE, sleep_time=DT)
                 break
 
         if not got_audio:
