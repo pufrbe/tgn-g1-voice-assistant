@@ -1,1 +1,4 @@
 .gemini_venv
+__pycache__/
+
+*.swp
