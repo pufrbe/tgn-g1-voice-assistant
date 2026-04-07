@@ -47,6 +47,7 @@ config = {
             }
         }
     },
+    "realtime_input_config": {"activity_handling" : "NO_INTERRUPTION"}
     # "system_instruction":"For factual or time-sensitive questions, use Google Search before answering. "
     # "If you did not use Search, say 'not searched'. Keep answers concise.",
 }
@@ -59,6 +60,8 @@ DT = 1
 
 pya = pyaudio.PyAudio()
 client = genai.Client()
+queue = asyncio.Queue(0)
+turn_complete = asyncio.Event()
 
 VOSK_MODEL_PATH = "vosk-model-small-es-0.42"
 
@@ -224,7 +227,7 @@ async def wait_for_wakeword(wake_word, timeout=60.0):
                     return
 
 
-async def record_until_silence(max_seconds: float = 30.0, end_word: str = "adios", timeout = 60.0) -> list[bytes]:
+async def record_until_silence(max_seconds: float = 30.0, end_word: str = "adios", timeout = 60.0, threshold = 0.002, silence_duration = 3.0) -> list[bytes]:
     """Record mic until user presses ENTER again."""
     loop = asyncio.get_running_loop()
 
@@ -243,6 +246,8 @@ async def record_until_silence(max_seconds: float = 30.0, end_word: str = "adios
     stop_task = asyncio.create_task(asyncio.to_thread(input))
     t0 = time.time()
     end = False
+    silence = None
+    noise = False 
     try:
         while True:
             timeout = max_seconds - (time.time() - t0)
@@ -261,28 +266,50 @@ async def record_until_silence(max_seconds: float = 30.0, end_word: str = "adios
 
             if recv_task in done:
                 data, _ = recv_task.result()
-                frames.append(data)    
-
-            if len(frames) > 7:
-                await queue.put(frames)
+                #frames.append(data)    
+                await queue.put(data)
+            
                             
             if recognizer.AcceptWaveform(data):
                 result = json.loads(recognizer.Result())
                 text = result.get("text", "")
-
+                print(text)
                 if text and time.time() - t0 > 1.0:
-                    print("[REC] Silence detected")
                     recognizer.Reset()
                     if end_word in text.split():
                         end = True
+                    
+            
+            audio_data = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+            # Calculamos el valor cuadrático medio (RMS)
+            ms = np.mean(audio_data**2)
+            
+            if ms > threshold:
+                noise = True
+
+            if noise and ms < threshold:
+
+                if silence is None:
+                    silence = time.time()
+                elif time.time() - silence > silence_duration:
+                    print("[REC] Silencio detectado")
                     break
+            else:
+                silence = None
+
+
     finally:
         sock.close()
 
     # small silence tail to help VAD infer end-of-speech
-    await queue.put([silence_chunk()] * 6)
-    return frames, end
+    for i in range(5):
+        await queue.put(silence_chunk())
 
+    await queue.put(None)    
+    
+    await queue.join()
+
+    return end
 
 async def play_reply_streaming(session):
     """Receive ONE model turn and play audio as it arrives (plus print transcript + tool debug)."""
@@ -297,65 +324,69 @@ async def play_reply_streaming(session):
         frames_per_buffer=CHUNK,
     )
     """
-    try:
-        turn = session.receive()
-        got_audio = False
-        saw_tooling = False
+    while True:
+        try:
+            turn = session.receive()
+            got_audio = False
+            saw_tooling = False
 
-        array = bytearray([])
-        chunk_accum = 0
+            array = bytearray([])
+            chunk_accum = 0
 
-        async for resp in turn: 
+            async for resp in turn: 
 
-            sc = getattr(resp, "server_content", None)
-            if not sc:
-                continue
+                sc = getattr(resp, "server_content", None)
+                if not sc:
+                    continue
 
-            # Print model audio transcription (you enabled output_audio_transcription) :contentReference[oaicite:3]{index=3}
-            ot = getattr(sc, "output_transcription", None)
-            if ot and getattr(ot, "text", None):
-                print("[model transcript]", ot.text)
+                # Print model audio transcription (you enabled output_audio_transcription) :contentReference[oaicite:3]{index=3}
+                ot = getattr(sc, "output_transcription", None)
+                if ot and getattr(ot, "text", None):
+                    print("[model transcript]", ot.text)
 
-            # If Search/tooling happens, Gemini 2.5 may emit executable_code / code_execution_result :contentReference[oaicite:4]{index=4}
-            mt = getattr(sc, "model_turn", None)
-            if mt:
-                for part in mt.parts:
-                    if getattr(part, "executable_code", None) is not None:
-                        saw_tooling = True
-                        print("[tool executable_code]\n", part.executable_code.code)
-                    if getattr(part, "code_execution_result", None) is not None:
-                        saw_tooling = True
-                        print("[tool code_execution_result]\n", part.code_execution_result.output)
+                # If Search/tooling happens, Gemini 2.5 may emit executable_code / code_execution_result :contentReference[oaicite:4]{index=4}
+                mt = getattr(sc, "model_turn", None)
+                if mt:
+                    for part in mt.parts:
+                        if getattr(part, "executable_code", None) is not None:
+                            saw_tooling = True
+                            print("[tool executable_code]\n", part.executable_code.code)
+                        if getattr(part, "code_execution_result", None) is not None:
+                            saw_tooling = True
+                            print("[tool code_execution_result]\n", part.code_execution_result.output)
 
-                    inline = getattr(part, "inline_data", None)
+                        inline = getattr(part, "inline_data", None)
+                        
+                        if inline and isinstance(inline.data, (bytes, bytearray)):
+                            got_audio = True
+                            #await asyncio.to_thread(
+                            array.extend(bytes(inline.data))
+                            chunk_accum += len(inline.data)
+
+                if chunk_accum > 72000:
+                    #await send_keep_alive(session)
+                    resampled = await asyncio.to_thread(array_resample, array, IN_RATE, OUT_RATE)
+                    await asyncio.to_thread(play_pcm_stream, audioClient, resampled, chunk_size = CHUNK_SIZE, sleep_time = DT)
+                    chunk_accum = 0
+                    array = bytearray([])
+
+                if getattr(sc, "turn_complete", False):
+                    resampled = array_resample(array, IN_RATE, OUT_RATE)
+                    play_pcm_stream(audioClient, resampled, chunk_size = CHUNK_SIZE, sleep_time = DT)
+                    turn_complete.set()
+                    break
                     
-                    if inline and isinstance(inline.data, (bytes, bytearray)):
-                        got_audio = True
-                        #await asyncio.to_thread(
-                        array.extend(bytes(inline.data))
-                        chunk_accum += len(inline.data)
-
-            if chunk_accum > 72000: 
-                resampled = array_resample(array, IN_RATE, OUT_RATE)
-                play_pcm_stream(audioClient, resampled, chunk_size = CHUNK_SIZE, sleep_time = DT)
-                chunk_accum = 0
-                array = bytearray([])
-
-            if getattr(sc, "turn_complete", False):
-                resampled = array_resample(array, IN_RATE, OUT_RATE)
-                play_pcm_stream(audioClient, resampled, chunk_size = CHUNK_SIZE, sleep_time = DT)
-                break
-
-        if not got_audio:
-            print("[WARN] No audio reply received.")
-        if not saw_tooling:
-            print("[INFO] No tool/code-execution observed this turn (likely answered without Search).")
-        
-   
-    finally:
-        pass
-        #out_stream.stop_stream()
-        #out_stream.close()
+            if not got_audio:
+                print("[WARN] No audio reply received.")
+            if not saw_tooling:
+                print("[INFO] No tool/code-execution observed this turn (likely answered without Search).")
+        #except Exception as e:
+            #print(f"[PLAY ERROR]: {e}")
+       
+        finally:
+            pass
+            #out_stream.stop_stream()
+            #out_stream.close()
 
 
 async def send_one_turn(session):
@@ -363,12 +394,31 @@ async def send_one_turn(session):
     Send one utterance to the *same* live session.
     We pace chunks roughly in real-time so VAD behaves more reliably.
     """
-    chunk_secs = len(frames[0]) / MIC_RATE
-    frames = await queue.get()
-    for ch in frames:
-        await session.send_realtime_input(audio={"data": ch, "mime_type": f"audio/pcm;rate={MIC_RATE}"})
-        await asyncio.sleep(chunk_secs)  # helps VAD / turn-taking consistency
-    if frames[0]
+    while True:
+        while queue.qsize() < 6:
+            await asyncio.sleep(0.01)
+
+        while True:
+            t0 = time.time()
+            frame = await queue.get()
+            
+            if frame is None:
+                queue.task_done()
+                await session.send_realtime_input(audio_stream_end=True)
+                break                
+                
+            chunk_secs = len(frame) / 2 / MIC_RATE
+            #for ch in frames:
+            try:
+                await session.send_realtime_input(audio={"data": frame, "mime_type": f"audio/pcm;rate={MIC_RATE}"})
+            except Exception as e:
+                print(f"[SESSION ERROR]: {e}")
+            queue.task_done()
+            await asyncio.sleep(chunk_secs - (time.time()- t0))  # helps VAD / turn-taking consistency
+
+async def send_keep_alive(session):
+    await session.send_realtime_input(audio={"data": silence_chunk(), "mime_type": f"audio/pcm;rate={MIC_RATE}"})
+        
 
 
 async def main():
@@ -381,6 +431,8 @@ async def main():
 
     async with client.aio.live.connect(model=model, config=config) as session:
         end = True
+        send_task = None
+        turn_complete.set()
         while True:
             #cmd = await wait_line("Ready. Press ENTER to record (or q to quit): ")
             #if cmd.lower() == "q":
@@ -393,14 +445,18 @@ async def main():
             if end:
                 await wait_for_wakeword(WAKE_WORD)
                 end = False
-            results = await asyncio.gather(record_until_silence(max_seconds = 30.0, end_word = END_WORD), send_one_turn(session))
+                if send_task is None:
+                    send_task = asyncio.create_task(send_one_turn(session))
+                    play_task = asyncio.create_task(play_reply_streaming(session))
+            await asyncio.wait_for(turn_complete.wait(), timeout = 15.0)
+            turn_complete.clear()
 
-            if len(frames) <= 6:
-                print("[INFO] Too short; try again.\n")
-                continue
+            end = await record_until_silence(max_seconds = 30.0, end_word = END_WORD)
+            
+            #    continue
             print("[Gemini] replying...")     
-            await send_one_turn(session, frames)
-            await play_reply_streaming(session)
+            #await send_one_turn(session, frames)
+            #await play_reply_streaming(session)
             print()
 
     pya.terminate()
