@@ -31,14 +31,14 @@ MCAST_GRP="239.168.123.161"
 
 # ---- Gemini Live ----
 model = "gemini-2.5-flash-native-audio-preview-12-2025"
-tools = [{'google_search': {}}]
+tools = [{}]
 
 config = {
     "response_modalities": ["AUDIO"],
     "tools": tools,
     # optional but very helpful for debugging:
     "output_audio_transcription": {},
-    "system_instruction": "Sos un robot que trabaja en la empresa TGN. Tu objetivo es permitir la realizacion de tareas de riesgo en plantas compresoras por medio de la teleoperacion. En un futuro aprenderas tales tareas, siendo un operario mas de la planta. Tu modelo es un unitree G1 con manos inspire handse FTP. Tu esquema de teleoperacion utiliza Meta Quest 3 y guantes hapticos SenseGlove Nova 2. Tenes un perro mascota que es el unitree go2 y esta pensado para realizar tareas de inspeccion autonoma. No des toda esta informacion de una vez, ni te centres unicamente en este prompt. Cuando se te dice gracias no busques seguir la conversacion. Responde con acento argentino nativo.",
+    "system_instruction": "Tu unica tarea es repetir lo que te dice el usuario. Deci exactamente lo mismo que el usuario, literalmente y sin cambiar nada. Lo unico a tener en cuanta es usar un acento argentino para decirlo.",
     "thinking_config":{"thinking_budget": 0},
     "speech_config": {
         "voice_config": {
@@ -47,7 +47,7 @@ config = {
             }
         }
     },
-    "realtime_input_config": {"activity_handling" : "START_OF_ACTIVITY_INTERRUPTS"}
+    # "realtime_input_config": {"activity_handling" : "NO_INTERRUPTION"}
     # "system_instruction":"For factual or time-sensitive questions, use Google Search before answering. "
     # "If you did not use Search, say 'not searched'. Keep answers concise.",
 }
@@ -250,7 +250,6 @@ async def record_until_silence(max_seconds: float = 30.0, end_word: str = "adios
     noise = False 
     try:
         while True:
-            audioClient.LedControl(255, 255, 0)
             timeout = max_seconds - (time.time() - t0)
             if timeout <= 0:
                 print("[REC] Max record time reached; sending.")
@@ -399,6 +398,8 @@ async def send_one_turn(session):
         while queue.qsize() < 6:
             await asyncio.sleep(0.01)
 
+        await asyncio.wait_for(turn_complete.wait(), timeout = 15.0)
+        turn_complete.clear()
         while True:
             t0 = time.time()
             frame = await queue.get()
@@ -423,6 +424,13 @@ async def send_keep_alive(session):
 
 
 async def main():
+    print(f"Mic device {IN_DEV} @ {MIC_RATE} Hz")
+    #print(f"Output device {OUT_DEV} (pulse) @ {OUT_RATE} Hz")
+    print("Controls:")
+    print("  ENTER       -> start recording")
+    print("  ENTER       -> stop and send")
+    print("  q + ENTER   -> quit\n")
+
     async with client.aio.live.connect(model=model, config=config) as session:
         end = True
         send_task = None
@@ -436,18 +444,17 @@ async def main():
             #if len(frames) <= 6:
             #    print("[INFO] Too short; try again.\n")
             #    continue
-            if end:
-                await wait_for_wakeword(WAKE_WORD)
-                end = False
-                if send_task is None:
-                    send_task = asyncio.create_task(send_one_turn(session))
-                    play_task = asyncio.create_task(play_reply_streaming(session))
-            await asyncio.wait_for(turn_complete.wait(), timeout = 15.0)
-            turn_complete.clear()
+            if send_task is None:
+                send_task = asyncio.create_task(send_one_turn(session))
+                play_task = asyncio.create_task(play_reply_streaming(session))
 
-            end = await record_until_silence(max_seconds = 30.0, end_word = END_WORD)
+            end = await record_until_silence(max_seconds = 180.0, end_word = END_WORD)
             
+            #    continue
             print("[Gemini] replying...")     
+            #await send_one_turn(session, frames)
+            #await play_reply_streaming(session)
+            print()
 
     pya.terminate()
 
