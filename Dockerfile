@@ -29,7 +29,7 @@ ENV LD_LIBRARY_PATH=/opt/cyclonedds/install/lib:${LD_LIBRARY_PATH}
 
 # ---- Clone your repos ----
 WORKDIR /packages
-RUN git clone https://github.com/dgayet/tgn-g1-voice-assistant.git
+RUN git clone https://github.com/pufrbe/tgn-g1-voice-assistant.git
 RUN git clone https://github.com/unitreerobotics/unitree_sdk2_python.git
 
 # ---- Install unitree_sdk2py ----

@@ -29,12 +29,15 @@ CHUNK = 1024  # ~64ms at 16kHz
 model = "gemini-2.5-flash-native-audio-preview-12-2025"
 tools = [{'google_search': {}}]
 
+with open('../prompt.txt', 'r') as file:
+    prompt = file.read()
+
 config = {
     "response_modalities": ["AUDIO"],
     "tools": tools,
     # optional but very helpful for debugging:
     "output_audio_transcription": {},
-    "system_instruction": "Sos un robot que trabaja en la empresa TGN. Tu objetivo es permitir la realizacion de tareas de riesgo en plantas compresoras por medio de la teleoperacion. En un futuro aprenderas tales tareas, siendo un operario mas de la planta. Tu modelo es un unitree G1 con manos inspire handse FTP. Tu esquema de teleoperacion utiliza Meta Quest 3 y guantes hapticos SenseGlove Nova 2. Tenes un perro mascota que es el unitree go2 y esta pensado para realizar tareas de inspeccion autonoma. No des toda esta informacion de una vez. Cuando se te dice gracias no busques seguir la conversacion.", 
+    "system_instruction": prompt, #"Sos un robot que trabaja en la empresa TGN. Tu objetivo es permitir la realizacion de tareas de riesgo en plantas compresoras por medio de la teleoperacion. En un futuro aprenderas tales tareas, siendo un operario mas de la planta. Tu modelo es un unitree G1 con manos inspire handse FTP. Tu esquema de teleoperacion utiliza Meta Quest 3 y guantes hapticos SenseGlove Nova 2. Tenes un perro mascota que es el unitree go2 y esta pensado para realizar tareas de inspeccion autonoma. No des toda esta informacion de una vez. Cuando se te dice gracias no busques seguir la conversacion.", 
     #"system_instruction":"No des toda la informacion de una vez. "
     # "If you did not use Search, say 'not searched'. Keep answers concise.",
 }
