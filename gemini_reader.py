@@ -62,17 +62,21 @@ def array_resample(array : bytearray, in_rate : int, out_rate : int):
     return data
 
 def main():
+    print("[INFO] Initializing audio client...")
     net_if = "eth0"
     ChannelFactoryInitialize(0, net_if)
     audio_client = AudioClient()
     audio_client.SetTimeout(10.0)
     audio_client.Init()
+    print("[INFO] Audio client initialized.")
 
     client = genai.Client()
 
     try:
+        print("[INFO] Sending request to Gemini API...")
         response = client.models.generate_content(
            model="gemini-2.5-flash-preview-tts",
+           #model="gemini-2.5-flash-lite-preview-tts",
            contents="Di lo siguiente animadamente y con acento argentino: Hola y bienvenidos a todos! Estamos aca presentando el proyecto de robotizacion de tareas de TGN.",
            config=types.GenerateContentConfig(
               response_modalities=["AUDIO"],
@@ -85,11 +89,14 @@ def main():
               ),
            )
         )
+        print("[INFO] Response received from Gemini API.")
         data = response.candidates[0].content.parts[0].inline_data.data
         data = array_resample(data, 24000, 16000)
+        print("[INFO] Playing audio...")
         play_pcm_stream(audio_client, data, 134234)
+        print("[INFO] Exiting...")
     except Exception as e:
-        print(f"Exception: {e}")
+        print(f"\nException: {e}")
 
 if __name__ == '__main__':
     try:

@@ -55,6 +55,7 @@ client = genai.Client()
 # ---- Concurrence ----
 queue = asyncio.Queue(0)
 turn_complete = asyncio.Event()
+answering = asyncio.Event()
 
 # ---- STT ----
 VOSK_MODEL_PATH = "vosk-model-small-es-0.42"
@@ -167,11 +168,8 @@ async def record_until_silence(sock, max_seconds: float = 30.0, end_word: str = 
 
     frames: list[bytes] = []
     print("[REC] Recording...")
-    stop_task = asyncio.create_task(asyncio.to_thread(input))
     t0 = time.time()
     end = False
-    silence = None
-    noise = False 
     while True:
         audioClient.LedControl(255, 255, 0)
         timeout = max_seconds - (time.time() - t0)
@@ -186,7 +184,6 @@ async def record_until_silence(sock, max_seconds: float = 30.0, end_word: str = 
             timeout=timeout,
             return_when=asyncio.FIRST_COMPLETED,
         )
-
 
         if recv_task in done:
             data, _ = recv_task.result()
@@ -203,22 +200,8 @@ async def record_until_silence(sock, max_seconds: float = 30.0, end_word: str = 
                     end = True
                 
         
-        audio_data = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-        # Calculamos el valor cuadrático medio (RMS)
-        ms = np.mean(audio_data**2)
-        
-        if not noise and ms > threshold:
-            noise = True
-
-        if noise and ms < threshold:
-
-            if silence is None:
-                silence = time.time()
-            elif time.time() - silence > silence_duration:
-                print("[REC] Silencio detectado")
-                break
-        else:
-            silence = None
+        if answering.is_set():
+            break
 
 
     # small silence tail to help VAD infer end-of-speech
@@ -232,7 +215,7 @@ async def record_until_silence(sock, max_seconds: float = 30.0, end_word: str = 
 
 async def play_reply_streaming(session):
     """Receive ONE model turn and play audio as it arrives (plus print transcript + tool debug)."""
-    stream_id = 2093840
+    stream_id = None
     while True:
         turn = session.receive()
         got_audio = False
@@ -266,8 +249,10 @@ async def play_reply_streaming(session):
                     inline = getattr(part, "inline_data", None)
                     
                     if inline and isinstance(inline.data, (bytes, bytearray)):
+                        if not stream_id:
+                            stream_id = int(time.time() * 1000)
                         got_audio = True
-                        #await asyncio.to_thread(
+                        answering.set()
                         array.extend(bytes(inline.data))
                         chunk_accum += len(inline.data)
 
@@ -278,8 +263,9 @@ async def play_reply_streaming(session):
                 array = bytearray([])
 
             if got_audio and getattr(sc, "turn_complete", False):
+                stream_id = None
                 turn_complete.set()
-                stream_id += 1
+                answering.clear()
                 break
                 
         if not got_audio:
@@ -343,13 +329,13 @@ async def main():
                     print(f"Excepcion {e}")
                 turn_complete.clear()
                 end = await record_until_silence(sock, max_seconds = 30.0, end_word = END_WORD)
-    except KeyboardInterrupt:
-        print("Exiting...")
     finally:
         if send_task:
             send_task.cancel()
         if play_task:
             play_task.cancel()
+        stop_pcm_stream(audioClient)
+        print("Exiting...")
 
 
 if __name__ == "__main__":
