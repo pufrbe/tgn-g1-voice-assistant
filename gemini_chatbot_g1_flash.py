@@ -3,7 +3,6 @@ import asyncio
 import time
 import socket
 
-import pyaudio
 import math
 from scipy import signal
 from google import genai
@@ -33,9 +32,8 @@ with open('prompt.txt', 'r') as file:
 config = {
     "response_modalities": ["AUDIO"],
     "tools": tools,
-    # optional but very helpful for debugging:
     "output_audio_transcription": {},
-    "system_instruction": prompt,#"Sos un robot que trabaja en la empresa TGN. Tu objetivo es permitir la realizacion de tareas de riesgo en plantas compresoras por medio de la teleoperacion. En un futuro aprenderas tales tareas, siendo un operario mas de la planta. Tu modelo es un unitree G1 con manos inspire handse FTP. Tu esquema de teleoperacion utiliza Meta Quest 3 y guantes hapticos SenseGlove Nova 2. Tenes un perro mascota que es el unitree go2 y esta pensado para realizar tareas de inspeccion autonoma. No des toda esta informacion de una vez, ni te centres unicamente en este prompt. Cuando se te dice gracias no busques seguir la conversacion. Responde con acento argentino nativo.",
+    "system_instruction": prompt,
     "thinking_config":{"thinking_budget": 0},
     "speech_config": {
         "voice_config": {
@@ -44,7 +42,6 @@ config = {
             }
         }
     },
-    "realtime_input_config": {"activity_handling" : "START_OF_ACTIVITY_INTERRUPTS"}
 }
 
 
@@ -53,7 +50,6 @@ OUT_RATE = 16000
 CHUNK_SIZE = 96000
 DT = 1
 
-pya = pyaudio.PyAudio()
 client = genai.Client()
 
 # ---- Concurrence ----
@@ -86,7 +82,7 @@ def array_resample(array : bytearray, in_rate : int, out_rate : int):
 
     return data
 
-def play_pcm_stream(client, pcm_list, stream_name="example", chunk_size=96000, sleep_time=1.0, verbose=False, out_rate=16000):
+def play_pcm_stream(client, pcm_list, stream_id, stream_name="example", chunk_size=96000, sleep_time=1.0, verbose=False, out_rate=16000):
     """
     Play PCM audio stream (16-bit little-endian format), sending data in chunks.
 
@@ -98,19 +94,16 @@ def play_pcm_stream(client, pcm_list, stream_name="example", chunk_size=96000, s
         sleep_time: Delay between chunks in seconds
     """
     pcm_data = bytes(pcm_list)
-    stream_id = str(2093840)
+    stream_id = str(stream_id)
     offset = 0
     chunk_index = 0
     total_size = len(pcm_data)
 
     while offset < total_size:
-        x0 = time.time()
         remaining = total_size - offset
         current_chunk_size = min(chunk_size, remaining)
         chunk = pcm_data[offset:offset + current_chunk_size]
 
-        sleep_time = current_chunk_size/out_rate/2
-        #print(f"sleep time: {sleep_time}")
         if verbose:
             # Print info about the current chunk
             print(f"[CHUNK {chunk_index}] offset = {offset}, size = {current_chunk_size} bytes")
@@ -128,32 +121,18 @@ def play_pcm_stream(client, pcm_list, stream_name="example", chunk_size=96000, s
 
         offset += current_chunk_size
         chunk_index += 1
-        x0 = time.time() - x0
 
 def stop_pcm_stream(client, stream_name: str ="example"):
     client.PlayStop(stream_name)
 
-
 def silence_chunk() -> bytes:
     return b"\x00\x00" * CHUNK
 
-
-async def wait_line(prompt: str = "") -> str:
-    return (await asyncio.to_thread(input, prompt)).strip()
-
-async def wait_for_wakeword(wake_word: str = "robot", timeout=60.0):
+async def wait_for_wakeword(sock, wake_word: str = "robot", timeout=60.0):
     """
     Waits for wake_word using Vosk STT, for a time = timeout
     """
     loop = asyncio.get_running_loop()
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    mreq = struct.pack("4s4s", socket.inet_aton(MCAST_GRP), socket.inet_aton("192.168.123.164"))
-    sock.bind(("0.0.0.0", MCAST_PORT)) 
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-     
-    #sock.setblocking(False)
-    #sock.settimeout(2.0)
 
     frames: list[bytes] = []
 
@@ -182,19 +161,9 @@ async def wait_for_wakeword(wake_word: str = "robot", timeout=60.0):
                     return
 
 
-async def record_until_silence(max_seconds: float = 30.0, end_word: str = "adios", timeout = 60.0, threshold = 0.002, silence_duration = 3.0) -> list[bytes]:
+async def record_until_silence(sock, max_seconds: float = 30.0, end_word: str = "adios", timeout = 60.0, threshold = 0.002, silence_duration = 3.0) -> list[bytes]:
     """Record mic until user stops speaking."""
     loop = asyncio.get_running_loop()
-
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("0.0.0.0", MCAST_PORT))
-
-    mreq = struct.pack("4s4s", socket.inet_aton(MCAST_GRP), socket.inet_aton("192.168.123.164"))
-
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-    #sock.setblocking(False)
-    #sock.settimeout(2.0)
 
     frames: list[bytes] = []
     print("[REC] Recording...")
@@ -203,59 +172,54 @@ async def record_until_silence(max_seconds: float = 30.0, end_word: str = "adios
     end = False
     silence = None
     noise = False 
-    try:
-        while True:
-            audioClient.LedControl(255, 255, 0)
-            timeout = max_seconds - (time.time() - t0)
-            if timeout <= 0:
-                print("[REC] Max record time reached; sending.")
+    while True:
+        audioClient.LedControl(255, 255, 0)
+        timeout = max_seconds - (time.time() - t0)
+        if timeout <= 0:
+            print("[REC] Max record time reached; sending.")
+            break
+
+        recv_task = asyncio.create_task(loop.sock_recvfrom(sock, CHUNK))
+
+        done, _ = await asyncio.wait(
+            {recv_task},
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+
+        if recv_task in done:
+            data, _ = recv_task.result()
+            #frames.append(data)    
+            await queue.put(data)
+        
+                        
+        if recognizer.AcceptWaveform(data):
+            result = json.loads(recognizer.Result())
+            text = result.get("text", "")
+            if text and time.time() - t0 > 1.0:
+                recognizer.Reset()
+                if end_word in text.split():
+                    end = True
+                
+        
+        audio_data = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        # Calculamos el valor cuadrático medio (RMS)
+        ms = np.mean(audio_data**2)
+        
+        if not noise and ms > threshold:
+            noise = True
+
+        if noise and ms < threshold:
+
+            if silence is None:
+                silence = time.time()
+            elif time.time() - silence > silence_duration:
+                print("[REC] Silencio detectado")
                 break
+        else:
+            silence = None
 
-            recv_task = asyncio.create_task(loop.sock_recvfrom(sock, CHUNK))
-
-            done, _ = await asyncio.wait(
-                {recv_task},
-                timeout=timeout,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-
-            if recv_task in done:
-                data, _ = recv_task.result()
-                #frames.append(data)    
-                await queue.put(data)
-            
-                            
-            if recognizer.AcceptWaveform(data):
-                result = json.loads(recognizer.Result())
-                text = result.get("text", "")
-                print(text)
-                if text and time.time() - t0 > 1.0:
-                    recognizer.Reset()
-                    if end_word in text.split():
-                        end = True
-                    
-            
-            audio_data = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-            # Calculamos el valor cuadrático medio (RMS)
-            ms = np.mean(audio_data**2)
-            
-            if ms > threshold:
-                noise = True
-
-            if noise and ms < threshold:
-
-                if silence is None:
-                    silence = time.time()
-                elif time.time() - silence > silence_duration:
-                    print("[REC] Silencio detectado")
-                    break
-            else:
-                silence = None
-
-
-    finally:
-        sock.close()
 
     # small silence tail to help VAD infer end-of-speech
     for i in range(5):
@@ -268,68 +232,60 @@ async def record_until_silence(max_seconds: float = 30.0, end_word: str = "adios
 
 async def play_reply_streaming(session):
     """Receive ONE model turn and play audio as it arrives (plus print transcript + tool debug)."""
+    stream_id = 2093840
     while True:
-        try:
-            turn = session.receive()
-            got_audio = False
-            saw_tooling = False
+        turn = session.receive()
+        got_audio = False
+        saw_tooling = False
 
-            array = bytearray([])
-            chunk_accum = 0
+        array = bytearray([])
+        chunk_accum = 0
 
-            async for resp in turn: 
+        async for resp in turn: 
 
-                sc = getattr(resp, "server_content", None)
-                if not sc:
-                    continue
+            sc = getattr(resp, "server_content", None)
+            if not sc:
+                continue
 
-                # Print model audio transcription (you enabled output_audio_transcription) :contentReference[oaicite:3]{index=3}
-                ot = getattr(sc, "output_transcription", None)
-                if ot and getattr(ot, "text", None):
-                    print("[model transcript]", ot.text)
+            # Print model audio transcription (you enabled output_audio_transcription) :contentReference[oaicite:3]{index=3}
+            ot = getattr(sc, "output_transcription", None)
+            if ot and getattr(ot, "text", None):
+                print("[model transcript]", ot.text)
 
-                # If Search/tooling happens, Gemini 2.5 may emit executable_code / code_execution_result :contentReference[oaicite:4]{index=4}
-                mt = getattr(sc, "model_turn", None)
-                if mt:
-                    for part in mt.parts:
-                        if getattr(part, "executable_code", None) is not None:
-                            saw_tooling = True
-                            print("[tool executable_code]\n", part.executable_code.code)
-                        if getattr(part, "code_execution_result", None) is not None:
-                            saw_tooling = True
-                            print("[tool code_execution_result]\n", part.code_execution_result.output)
+            # If Search/tooling happens, Gemini 2.5 may emit executable_code / code_execution_result :contentReference[oaicite:4]{index=4}
+            mt = getattr(sc, "model_turn", None)
+            if mt:
+                for part in mt.parts:
+                    if getattr(part, "executable_code", None) is not None:
+                        saw_tooling = True
+                        print("[tool executable_code]\n", part.executable_code.code)
+                    if getattr(part, "code_execution_result", None) is not None:
+                        saw_tooling = True
+                        print("[tool code_execution_result]\n", part.code_execution_result.output)
 
-                        inline = getattr(part, "inline_data", None)
-                        
-                        if inline and isinstance(inline.data, (bytes, bytearray)):
-                            got_audio = True
-                            #await asyncio.to_thread(
-                            array.extend(bytes(inline.data))
-                            chunk_accum += len(inline.data)
-
-                if chunk_accum > 0:
-                    resampled = await asyncio.to_thread(array_resample, array, IN_RATE, OUT_RATE)
-                    await asyncio.to_thread(play_pcm_stream, audioClient, resampled, chunk_size = CHUNK_SIZE, sleep_time = DT)
-                    chunk_accum = 0
-                    array = bytearray([])
-
-                if getattr(sc, "turn_complete", False):
-                    #resampled = array_resample(array, IN_RATE, OUT_RATE)
-                    #play_pcm_stream(audioClient, resampled, chunk_size = CHUNK_SIZE, sleep_time = DT)
-                    turn_complete.set()
-                    break
+                    inline = getattr(part, "inline_data", None)
                     
-            if not got_audio:
-                print("[WARN] No audio reply received.")
-            if not saw_tooling:
-                print("[INFO] No tool/code-execution observed this turn (likely answered without Search).")
-        #except Exception as e:
-            #print(f"[PLAY ERROR]: {e}")
-       
-        finally:
-            pass
-            #out_stream.stop_stream()
-            #out_stream.close()
+                    if inline and isinstance(inline.data, (bytes, bytearray)):
+                        got_audio = True
+                        #await asyncio.to_thread(
+                        array.extend(bytes(inline.data))
+                        chunk_accum += len(inline.data)
+
+            if chunk_accum > 0:
+                resampled = await asyncio.to_thread(array_resample, array, IN_RATE, OUT_RATE)
+                await asyncio.to_thread(play_pcm_stream, audioClient, resampled, stream_id, chunk_size = CHUNK_SIZE, sleep_time = DT)
+                chunk_accum = 0
+                array = bytearray([])
+
+            if got_audio and getattr(sc, "turn_complete", False):
+                turn_complete.set()
+                stream_id += 1
+                break
+                
+        if not got_audio:
+            print("[WARN] No audio reply received.")
+        if not saw_tooling:
+            print("[INFO] No tool/code-execution observed this turn (likely answered without Search).")
 
 
 async def send_one_turn(session):
@@ -358,6 +314,15 @@ async def send_one_turn(session):
 
 
 async def main():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", MCAST_PORT))
+
+    mreq = struct.pack("4s4s", socket.inet_aton(MCAST_GRP), socket.inet_aton("192.168.123.164"))
+
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    sock.setblocking(False)
+
     send_task = None
     play_task = None
     try:
@@ -366,17 +331,18 @@ async def main():
             turn_complete.set()
             while True:
                 if end:
-                    await wait_for_wakeword(WAKE_WORD)
+                    await wait_for_wakeword(sock, WAKE_WORD)
                     end = False
                     if send_task is None:
                         send_task = asyncio.create_task(send_one_turn(session))
                         play_task = asyncio.create_task(play_reply_streaming(session))
-                await asyncio.wait_for(turn_complete.wait(), timeout = 15.0)
-                turn_complete.clear()
 
-                end = await record_until_silence(max_seconds = 30.0, end_word = END_WORD)
-                
-                print("[Gemini] replying...")     
+                try:
+                    await turn_complete.wait()
+                except Exception as e:
+                    print(f"Excepcion {e}")
+                turn_complete.clear()
+                end = await record_until_silence(sock, max_seconds = 30.0, end_word = END_WORD)
     except KeyboardInterrupt:
         print("Exiting...")
     finally:
