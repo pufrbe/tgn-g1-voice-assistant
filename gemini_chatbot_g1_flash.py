@@ -15,16 +15,10 @@ import json
 import sys
 sys.path.append("./vendor")
 from vosk import Model, KaldiRecognizer
-# ---- Your known-good devices ----
-IN_DEV = 24     # ReSpeaker 4 Mic Array
-#OUT_DEV = 26    # pulse (routes to default BT sink)
 
 # ---- Audio ----
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
 MIC_RATE = 16000
-#OUT_RATE = 24000
-CHUNK = 8192
+CHUNK = 5120
 
 MCAST_PORT=5555
 MCAST_GRP="239.168.123.161"
@@ -51,8 +45,6 @@ config = {
         }
     },
     "realtime_input_config": {"activity_handling" : "START_OF_ACTIVITY_INTERRUPTS"}
-    # "system_instruction":"For factual or time-sensitive questions, use Google Search before answering. "
-    # "If you did not use Search, say 'not searched'. Keep answers concise.",
 }
 
 
@@ -106,7 +98,7 @@ def play_pcm_stream(client, pcm_list, stream_name="example", chunk_size=96000, s
         sleep_time: Delay between chunks in seconds
     """
     pcm_data = bytes(pcm_list)
-    stream_id = str(2093840)  # Unique stream ID based on current timestamp
+    stream_id = str(2093840)
     offset = 0
     chunk_index = 0
     total_size = len(pcm_data)
@@ -133,8 +125,6 @@ def play_pcm_stream(client, pcm_list, stream_name="example", chunk_size=96000, s
         if ret_code != 0:
             print(f"[ERROR] Failed to send chunk {chunk_index}, return code: {ret_code}")
             break
-        else:
-            print(f"[INFO] Chunk {chunk_index} sent successfully")
 
         offset += current_chunk_size
         chunk_index += 1
@@ -278,17 +268,6 @@ async def record_until_silence(max_seconds: float = 30.0, end_word: str = "adios
 
 async def play_reply_streaming(session):
     """Receive ONE model turn and play audio as it arrives (plus print transcript + tool debug)."""
-    """
-    out_stream = await asyncio.to_thread(
-        pya.open,
-        format=FORMAT,
-        channels=CHANNELS,
-        rate=OUT_RATE,
-        output=True,
-        output_device_index=OUT_DEV,
-        frames_per_buffer=CHUNK,
-    )
-    """
     while True:
         try:
             turn = session.receive()
@@ -328,15 +307,15 @@ async def play_reply_streaming(session):
                             array.extend(bytes(inline.data))
                             chunk_accum += len(inline.data)
 
-                if chunk_accum > 72000:
+                if chunk_accum > 0:
                     resampled = await asyncio.to_thread(array_resample, array, IN_RATE, OUT_RATE)
                     await asyncio.to_thread(play_pcm_stream, audioClient, resampled, chunk_size = CHUNK_SIZE, sleep_time = DT)
                     chunk_accum = 0
                     array = bytearray([])
 
                 if getattr(sc, "turn_complete", False):
-                    resampled = array_resample(array, IN_RATE, OUT_RATE)
-                    play_pcm_stream(audioClient, resampled, chunk_size = CHUNK_SIZE, sleep_time = DT)
+                    #resampled = array_resample(array, IN_RATE, OUT_RATE)
+                    #play_pcm_stream(audioClient, resampled, chunk_size = CHUNK_SIZE, sleep_time = DT)
                     turn_complete.set()
                     break
                     
@@ -359,55 +338,52 @@ async def send_one_turn(session):
     We pace chunks roughly in real-time so VAD behaves more reliably.
     """
     while True:
-        while queue.qsize() < 6:
-            await asyncio.sleep(0.01)
-
-        while True:
-            t0 = time.time()
-            frame = await queue.get()
-            
-            if frame is None:
-                queue.task_done()
-                await session.send_realtime_input(audio_stream_end=True)
-                break                
-                
-            chunk_secs = len(frame) / 2 / MIC_RATE
-            #for ch in frames:
-            try:
-                await session.send_realtime_input(audio={"data": frame, "mime_type": f"audio/pcm;rate={MIC_RATE}"})
-            except Exception as e:
-                print(f"[SESSION ERROR]: {e}")
+        t0 = time.time()
+        frame = await queue.get()
+        
+        if frame is None:
             queue.task_done()
-            await asyncio.sleep(chunk_secs - (time.time()- t0))  # helps VAD / turn-taking consistency
+            await session.send_realtime_input(audio_stream_end=True)
+            continue
+            
+        chunk_secs = len(frame) / 2 / MIC_RATE
+        #for ch in frames:
+        try:
+            await session.send_realtime_input(audio={"data": frame, "mime_type": f"audio/pcm;rate={MIC_RATE}"})
+        except Exception as e:
+            print(f"[SESSION ERROR]: {e}")
+        queue.task_done()
+        await asyncio.sleep(chunk_secs - (time.time() - t0))  # helps VAD / turn-taking consistency
+
+
 
 async def main():
-    async with client.aio.live.connect(model=model, config=config) as session:
-        end = True
-        send_task = None
-        turn_complete.set()
-        while True:
-            #cmd = await wait_line("Ready. Press ENTER to record (or q to quit): ")
-            #if cmd.lower() == "q":
-            #    break
+    send_task = None
+    play_task = None
+    try:
+        async with client.aio.live.connect(model=model, config=config) as session:
+            end = True
+            turn_complete.set()
+            while True:
+                if end:
+                    await wait_for_wakeword(WAKE_WORD)
+                    end = False
+                    if send_task is None:
+                        send_task = asyncio.create_task(send_one_turn(session))
+                        play_task = asyncio.create_task(play_reply_streaming(session))
+                await asyncio.wait_for(turn_complete.wait(), timeout = 15.0)
+                turn_complete.clear()
 
-            #frames = await record_until_enter(max_seconds=30.0)
-            #if len(frames) <= 6:
-            #    print("[INFO] Too short; try again.\n")
-            #    continue
-            if end:
-                await wait_for_wakeword(WAKE_WORD)
-                end = False
-                if send_task is None:
-                    send_task = asyncio.create_task(send_one_turn(session))
-                    play_task = asyncio.create_task(play_reply_streaming(session))
-            await asyncio.wait_for(turn_complete.wait(), timeout = 15.0)
-            turn_complete.clear()
-
-            end = await record_until_silence(max_seconds = 30.0, end_word = END_WORD)
-            
-            print("[Gemini] replying...")     
-
-    pya.terminate()
+                end = await record_until_silence(max_seconds = 30.0, end_word = END_WORD)
+                
+                print("[Gemini] replying...")     
+    except KeyboardInterrupt:
+        print("Exiting...")
+    finally:
+        if send_task:
+            send_task.cancel()
+        if play_task:
+            play_task.cancel()
 
 
 if __name__ == "__main__":
